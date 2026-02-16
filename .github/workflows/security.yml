@@ -1,0 +1,542 @@
+# =============================================================================
+# Security Pipeline - Standalone Version
+# =============================================================================
+# Self-contained security workflow for personal GitHub accounts.
+# Copy this to any repository at .github/workflows/security.yml
+#
+# Features:
+# - Auto-detects technologies (languages, containers, IaC)
+# - Skips irrelevant scans automatically
+# - Fails on CRITICAL/HIGH, warns on MEDIUM/LOW
+# - Creates issues for found vulnerabilities
+# - Results visible in GitHub Security tab
+# =============================================================================
+
+name: Security
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  schedule:
+    # Weekly security scan on Monday at 6:00 AM UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      severity-threshold:
+        description: 'Minimum severity to fail on'
+        required: false
+        default: 'HIGH'
+        type: choice
+        options:
+          - CRITICAL
+          - HIGH
+          - MEDIUM
+          - LOW
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+  issues: write
+
+env:
+  CREATE_ISSUES: true
+
+jobs:
+  # ===========================================================================
+  # Stack Detection - Determines what scans to run
+  # ===========================================================================
+  detect-stack:
+    name: Detect Stack
+    runs-on: ubuntu-latest
+    outputs:
+      has_dockerfile: ${{ steps.detect.outputs.has_dockerfile }}
+      has_terraform: ${{ steps.detect.outputs.has_terraform }}
+      has_cloudformation: ${{ steps.detect.outputs.has_cloudformation }}
+      has_kubernetes: ${{ steps.detect.outputs.has_kubernetes }}
+      has_javascript: ${{ steps.detect.outputs.has_javascript }}
+      has_python: ${{ steps.detect.outputs.has_python }}
+      has_go: ${{ steps.detect.outputs.has_go }}
+      has_rust: ${{ steps.detect.outputs.has_rust }}
+      has_java: ${{ steps.detect.outputs.has_java }}
+      languages_for_codeql: ${{ steps.detect.outputs.languages_for_codeql }}
+      has_any_code: ${{ steps.detect.outputs.has_any_code }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Detect technologies
+        id: detect
+        run: |
+          # Container detection
+          if find . -name "Dockerfile*" -o -name "docker-compose*.yml" 2>/dev/null | grep -q .; then
+            echo "has_dockerfile=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_dockerfile=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Terraform detection
+          if find . -name "*.tf" 2>/dev/null | grep -q .; then
+            echo "has_terraform=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_terraform=false" >> $GITHUB_OUTPUT
+          fi
+
+          # CloudFormation detection
+          if find . \( -name "*.yaml" -o -name "*.yml" \) -exec grep -l "AWSTemplateFormatVersion" {} \; 2>/dev/null | grep -q .; then
+            echo "has_cloudformation=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_cloudformation=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Kubernetes detection
+          if find . \( -name "*.yaml" -o -name "*.yml" \) -exec grep -l "kind:.*\(Deployment\|Service\|Pod\|ConfigMap\)" {} \; 2>/dev/null | grep -q .; then
+            echo "has_kubernetes=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_kubernetes=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Language detection
+          has_js=false
+          has_py=false
+          has_go=false
+          has_rust=false
+          has_java=false
+          has_any=false
+
+          if find . \( -name "package.json" -o -name "*.js" -o -name "*.ts" -o -name "*.jsx" -o -name "*.tsx" \) 2>/dev/null | grep -q .; then
+            has_js=true
+            has_any=true
+          fi
+
+          if find . \( -name "requirements.txt" -o -name "pyproject.toml" -o -name "Pipfile" -o -name "*.py" \) 2>/dev/null | grep -q .; then
+            has_py=true
+            has_any=true
+          fi
+
+          if find . \( -name "go.mod" -o -name "*.go" \) 2>/dev/null | grep -q .; then
+            has_go=true
+            has_any=true
+          fi
+
+          if find . \( -name "Cargo.toml" -o -name "*.rs" \) 2>/dev/null | grep -q .; then
+            has_rust=true
+            has_any=true
+          fi
+
+          if find . \( -name "pom.xml" -o -name "build.gradle" -o -name "*.java" \) 2>/dev/null | grep -q .; then
+            has_java=true
+            has_any=true
+          fi
+
+          echo "has_javascript=$has_js" >> $GITHUB_OUTPUT
+          echo "has_python=$has_py" >> $GITHUB_OUTPUT
+          echo "has_go=$has_go" >> $GITHUB_OUTPUT
+          echo "has_rust=$has_rust" >> $GITHUB_OUTPUT
+          echo "has_java=$has_java" >> $GITHUB_OUTPUT
+          echo "has_any_code=$has_any" >> $GITHUB_OUTPUT
+
+          # Build CodeQL language matrix
+          codeql_langs=()
+          if [ "$has_js" = "true" ]; then codeql_langs+=("javascript-typescript"); fi
+          if [ "$has_py" = "true" ]; then codeql_langs+=("python"); fi
+          if [ "$has_go" = "true" ]; then codeql_langs+=("go"); fi
+          if [ "$has_java" = "true" ]; then codeql_langs+=("java-kotlin"); fi
+
+          if [ ${#codeql_langs[@]} -eq 0 ]; then
+            echo "languages_for_codeql=[]" >> $GITHUB_OUTPUT
+          else
+            json_array=$(printf '%s\n' "${codeql_langs[@]}" | jq -R . | jq -s -c .)
+            echo "languages_for_codeql=$json_array" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Print detection results
+        run: |
+          echo "=== Stack Detection Results ==="
+          echo ""
+          echo "Languages:"
+          echo "  JavaScript/TS: ${{ steps.detect.outputs.has_javascript }}"
+          echo "  Python:        ${{ steps.detect.outputs.has_python }}"
+          echo "  Go:            ${{ steps.detect.outputs.has_go }}"
+          echo "  Rust:          ${{ steps.detect.outputs.has_rust }}"
+          echo "  Java:          ${{ steps.detect.outputs.has_java }}"
+          echo ""
+          echo "Infrastructure:"
+          echo "  Dockerfile:    ${{ steps.detect.outputs.has_dockerfile }}"
+          echo "  Terraform:     ${{ steps.detect.outputs.has_terraform }}"
+          echo "  CloudFormation: ${{ steps.detect.outputs.has_cloudformation }}"
+          echo "  Kubernetes:    ${{ steps.detect.outputs.has_kubernetes }}"
+          echo ""
+          echo "CodeQL Languages: ${{ steps.detect.outputs.languages_for_codeql }}"
+
+  # ===========================================================================
+  # Secret Scanning - Detects leaked credentials
+  # ===========================================================================
+  secret-scan:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        id: gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: true
+
+      - name: Create issue for secrets found
+        if: failure() && env.CREATE_ISSUES == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const title = 'Security Alert: Secrets Detected';
+            const body = `## Secret Scanning Alert
+
+            Gitleaks detected potential secrets in this repository.
+
+            **Workflow Run:** [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            ### Immediate Actions Required:
+            1. Review the workflow logs for details
+            2. Rotate any exposed credentials immediately
+            3. Remove secrets from git history
+            4. Add patterns to \`.gitleaks.toml\` if these are false positives
+
+            ---
+            *Auto-generated by security pipeline*`;
+
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security'
+            });
+
+            const existingIssue = issues.data.find(i => i.title === title);
+
+            if (!existingIssue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['security', 'critical']
+              });
+            }
+
+  # ===========================================================================
+  # Dependency Scanning - Finds vulnerable dependencies
+  # ===========================================================================
+  dependency-scan:
+    name: Dependency Scanning
+    needs: detect-stack
+    if: needs.detect-stack.outputs.has_any_code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM,LOW'
+          exit-code: '0'
+
+      - name: Upload to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@ce28f5bb42b7a9f2c824e633a3f6ee835bab6858 # v3.29.0
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'dependency-scan'
+
+      - name: Check for critical/high vulnerabilities
+        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # v0.29.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          ignore-unfixed: true
+
+      - name: Create issue for vulnerabilities
+        if: failure() && env.CREATE_ISSUES == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const title = 'Security Alert: Vulnerable Dependencies';
+            const body = `## Dependency Vulnerability Alert
+
+            Trivy detected vulnerable dependencies.
+
+            **Workflow Run:** [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Security Tab:** [View Vulnerabilities](${{ github.server_url }}/${{ github.repository }}/security/code-scanning)
+
+            ### Actions Required:
+            1. Review the Security tab for details
+            2. Update affected dependencies
+            3. Add exceptions to \`.trivyignore\` if needed
+
+            ---
+            *Auto-generated by security pipeline*`;
+
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security'
+            });
+
+            const existingIssue = issues.data.find(i => i.title === title);
+
+            if (!existingIssue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['security', 'dependencies']
+              });
+            }
+
+  # ===========================================================================
+  # SAST - Static Application Security Testing
+  # ===========================================================================
+  sast-scan:
+    name: SAST (${{ matrix.language }})
+    needs: detect-stack
+    if: needs.detect-stack.outputs.languages_for_codeql != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJson(needs.detect-stack.outputs.languages_for_codeql) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@ce28f5bb42b7a9f2c824e633a3f6ee835bab6858 # v3.29.0
+        with:
+          languages: ${{ matrix.language }}
+          queries: +security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@ce28f5bb42b7a9f2c824e633a3f6ee835bab6858 # v3.29.0
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@ce28f5bb42b7a9f2c824e633a3f6ee835bab6858 # v3.29.0
+        with:
+          category: 'sast-${{ matrix.language }}'
+
+  # ===========================================================================
+  # Container Scanning - Scans Docker images
+  # ===========================================================================
+  container-scan:
+    name: Container Scanning
+    needs: detect-stack
+    if: needs.detect-stack.outputs.has_dockerfile == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # v3.10.0
+
+      - name: Find and build Docker images
+        id: build
+        run: |
+          images=""
+          for df in $(find . -name "Dockerfile*" -type f | head -3); do
+            dir=$(dirname "$df")
+            name=$(basename "$df" | tr '.' '-')
+            tag="scan:${name}-$(echo $dir | tr '/' '-' | tr '.' '-')"
+            
+            echo "Building $df as $tag"
+            if docker build -f "$df" -t "$tag" "$dir" 2>/dev/null; then
+              images="$images $tag"
+            fi
+          done
+          echo "images=$images" >> $GITHUB_OUTPUT
+
+      - name: Scan images with Trivy
+        if: steps.build.outputs.images != ''
+        run: |
+          exit_code=0
+          for image in ${{ steps.build.outputs.images }}; do
+            echo "=== Scanning $image ==="
+            docker run --rm \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              aquasec/trivy:latest image \
+              --severity CRITICAL,HIGH \
+              --exit-code 1 \
+              --ignore-unfixed \
+              "$image" || exit_code=1
+          done
+          exit $exit_code
+
+  # ===========================================================================
+  # IaC Scanning - Scans Infrastructure as Code
+  # ===========================================================================
+  iac-scan:
+    name: IaC Scanning
+    needs: detect-stack
+    if: |
+      needs.detect-stack.outputs.has_terraform == 'true' ||
+      needs.detect-stack.outputs.has_cloudformation == 'true' ||
+      needs.detect-stack.outputs.has_kubernetes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Checkov
+        id: checkov
+        uses: bridgecrewio/checkov-action@99bb2caf318856dcb65adc4c69f4023df7617b07 # v12.2952.0
+        with:
+          directory: .
+          framework: terraform,cloudformation,kubernetes,dockerfile
+          output_format: cli,sarif
+          output_file_path: console,checkov-results.sarif
+          soft_fail: false
+        continue-on-error: true
+
+      - name: Upload Checkov results
+        if: always()
+        uses: github/codeql-action/upload-sarif@ce28f5bb42b7a9f2c824e633a3f6ee835bab6858 # v3.29.0
+        with:
+          sarif_file: checkov-results.sarif
+          category: 'iac-scan'
+        continue-on-error: true
+
+      - name: Create issue for IaC findings
+        if: steps.checkov.outcome == 'failure' && env.CREATE_ISSUES == 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const title = 'Security Alert: IaC Misconfigurations';
+            const body = `## Infrastructure as Code Alert
+
+            Checkov detected security misconfigurations.
+
+            **Workflow Run:** [View Details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Security Tab:** [View Findings](${{ github.server_url }}/${{ github.repository }}/security/code-scanning)
+
+            ### Actions Required:
+            1. Review the Security tab for details
+            2. Fix infrastructure misconfigurations
+            3. Add exceptions to \`.checkov.yaml\` if needed
+
+            ---
+            *Auto-generated by security pipeline*`;
+
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'security'
+            });
+
+            const existingIssue = issues.data.find(i => i.title === title);
+
+            if (!existingIssue) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['security', 'infrastructure']
+              });
+            }
+
+      - name: Fail if Checkov found issues
+        if: steps.checkov.outcome == 'failure'
+        run: exit 1
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+  security-summary:
+    name: Security Summary
+    needs: [detect-stack, secret-scan, dependency-scan, sast-scan, container-scan, iac-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          echo "=== Security Pipeline Summary ==="
+          echo ""
+          echo "Secret Scan:     ${{ needs.secret-scan.result }}"
+          echo "Dependency Scan: ${{ needs.dependency-scan.result }}"
+          echo "SAST Scan:       ${{ needs.sast-scan.result }}"
+          echo "Container Scan:  ${{ needs.container-scan.result }}"
+          echo "IaC Scan:        ${{ needs.iac-scan.result }}"
+          echo ""
+          
+          failed=false
+          
+          for result in "${{ needs.secret-scan.result }}" \
+                        "${{ needs.dependency-scan.result }}" \
+                        "${{ needs.sast-scan.result }}" \
+                        "${{ needs.container-scan.result }}" \
+                        "${{ needs.iac-scan.result }}"; do
+            if [ "$result" = "failure" ]; then
+              failed=true
+            fi
+          done
+          
+          if [ "$failed" = "true" ]; then
+            echo "::error::Security issues found. Review the logs above."
+            exit 1
+          fi
+          
+          echo "All security checks passed!"
+
+      - name: Add PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const status = (result) => {
+              if (result === 'success') return 'Passed';
+              if (result === 'failure') return 'Failed';
+              if (result === 'skipped') return 'Skipped';
+              return 'Unknown';
+            };
+
+            const body = `## Security Scan Results
+
+            | Scan | Status |
+            |------|--------|
+            | Secret Detection | ${status('${{ needs.secret-scan.result }}')} |
+            | Dependency Scan | ${status('${{ needs.dependency-scan.result }}')} |
+            | SAST (CodeQL) | ${status('${{ needs.sast-scan.result }}')} |
+            | Container Scan | ${status('${{ needs.container-scan.result }}')} |
+            | IaC Scan | ${status('${{ needs.iac-scan.result }}')} |
+
+            [View details](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

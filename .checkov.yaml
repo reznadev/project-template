@@ -1,0 +1,112 @@
+# =============================================================================
+# Checkov Configuration
+# =============================================================================
+# Customize IaC security scanning behavior.
+# Documentation: https://www.checkov.io/2.Basics/CLI%20Command%20Reference.html
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Framework Selection
+# -----------------------------------------------------------------------------
+# Which IaC frameworks to scan
+framework:
+  - terraform
+  - cloudformation
+  - kubernetes
+  - dockerfile
+  - helm
+  - github_actions
+
+# -----------------------------------------------------------------------------
+# Directories
+# -----------------------------------------------------------------------------
+# Directories to scan (defaults to current directory)
+# directory:
+#   - ./terraform
+#   - ./cloudformation
+#   - ./k8s
+
+# -----------------------------------------------------------------------------
+# Skip Checks
+# -----------------------------------------------------------------------------
+# Checks to skip (use sparingly and document why)
+skip-check:
+  # Example skips - uncomment and adjust as needed
+  # - CKV_AWS_115  # Lambda function configured with function-level concurrent execution limit
+  # - CKV_AWS_116  # Lambda function configured with Dead Letter Queue (DLQ)
+  # - CKV_AWS_117  # Lambda function is not configured inside a VPC
+  # - CKV_AWS_173  # Encryption for Lambda environment variables is not enabled
+  
+  # Common skips for development/non-production environments
+  # - CKV_AWS_18   # S3 bucket logging not enabled
+  # - CKV_AWS_21   # S3 bucket versioning not enabled
+
+# -----------------------------------------------------------------------------
+# Check Inclusion
+# -----------------------------------------------------------------------------
+# Run only specific checks (overrides skip-check)
+# check:
+#   - CKV_AWS_1
+#   - CKV_AWS_2
+
+# -----------------------------------------------------------------------------
+# Soft Fail
+# -----------------------------------------------------------------------------
+# Don't fail the pipeline, just report (set to true for advisory mode)
+soft-fail: false
+
+# Soft fail only on specific checks
+# soft-fail-on:
+#   - CKV_AWS_115
+#   - CKV_AWS_116
+
+# -----------------------------------------------------------------------------
+# Output Configuration
+# -----------------------------------------------------------------------------
+# Compact output for cleaner logs
+compact: true
+
+# Show only failed checks
+# quiet: true
+
+# -----------------------------------------------------------------------------
+# External Checks
+# -----------------------------------------------------------------------------
+# Load custom checks from external directories
+# external-checks-dir:
+#   - ./custom-checks
+
+# Load checks from external Git repos
+# external-checks-git:
+#   - https://github.com/bridgecrewio/checkov-custom-checks
+
+# -----------------------------------------------------------------------------
+# Variable Evaluation
+# -----------------------------------------------------------------------------
+# Files containing variable definitions
+# var-file:
+#   - ./terraform/dev.tfvars
+#   - ./terraform/common.tfvars
+
+# -----------------------------------------------------------------------------
+# Secrets Detection
+# -----------------------------------------------------------------------------
+# Enable/disable secrets scanning within IaC
+enable-secret-scan-all-files: false
+
+# -----------------------------------------------------------------------------
+# Baseline
+# -----------------------------------------------------------------------------
+# Use a baseline file to suppress known issues
+# This is useful for legacy code - findings in baseline won't fail the build
+# baseline: .checkov.baseline
+
+# To create a baseline:
+# checkov -d . --create-baseline
+
+# -----------------------------------------------------------------------------
+# Block List
+# -----------------------------------------------------------------------------
+# Block specific resource types from being created
+# block-list-secret-scan:
+#   - aws_db_instance

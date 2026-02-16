@@ -1,0 +1,99 @@
+# =============================================================================
+# Gitleaks Configuration
+# =============================================================================
+# Customize secret detection rules and allowlists.
+# Documentation: https://github.com/gitleaks/gitleaks#configuration
+# =============================================================================
+
+[extend]
+# Extend the default gitleaks config
+useDefault = true
+
+# =============================================================================
+# Custom Rules
+# =============================================================================
+# Add organization-specific patterns to detect
+
+# Example: Detect internal API tokens
+# [[rules]]
+# id = "internal-api-token"
+# description = "Internal API Token"
+# regex = '''INTERNAL_[A-Z]+_TOKEN['":\s]*[=:]\s*['"]?([a-zA-Z0-9_-]{32,})['"]?'''
+# secretGroup = 1
+# tags = ["internal", "api"]
+
+# =============================================================================
+# Allowlist - Global
+# =============================================================================
+# Patterns that should be ignored across all rules
+
+[allowlist]
+description = "Global allowlist"
+
+# Files to ignore
+paths = [
+  # Lock files (may contain hashes that look like secrets)
+  '''package-lock\.json''',
+  '''yarn\.lock''',
+  '''pnpm-lock\.yaml''',
+  '''Cargo\.lock''',
+  '''go\.sum''',
+  '''Pipfile\.lock''',
+  '''poetry\.lock''',
+  
+  # Test fixtures and mocks
+  '''(^|/)test(s)?/.*fixtures?/''',
+  '''(^|/)__mocks__/''',
+  '''\.test\.(js|ts|jsx|tsx)$''',
+  '''\.spec\.(js|ts|jsx|tsx)$''',
+  
+  # Documentation
+  '''\.md$''',
+  '''docs/.*''',
+  
+  # IDE and editor configs
+  '''\.idea/''',
+  '''\.vscode/''',
+  
+  # Build outputs
+  '''dist/''',
+  '''build/''',
+  '''node_modules/''',
+  '''vendor/''',
+  '''target/''',
+]
+
+# Specific patterns to ignore (regexes)
+regexes = [
+  # Example placeholder values
+  '''(?i)(example|sample|test|fake|dummy|placeholder)''',
+  # Common false positives
+  '''AKIAIOSFODNN7EXAMPLE''',  # AWS example key
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',  # AWS example secret
+]
+
+# Specific commits to ignore (useful for historical secrets that have been rotated)
+commits = [
+  # "abc123def456..."  # Add commit hashes here
+]
+
+# =============================================================================
+# Rule-specific allowlists
+# =============================================================================
+
+# Example: Allow specific patterns for AWS keys (e.g., in tests)
+# [[rules]]
+# id = "aws-access-key-id"
+# [rules.allowlist]
+# regexes = [
+#   '''AKIA[A-Z0-9]{16}EXAMPLE''',
+# ]
+
+# =============================================================================
+# Entropy Configuration
+# =============================================================================
+# Adjust entropy thresholds if you're getting too many false positives
+
+# Uncomment to reduce entropy-based detection sensitivity
+# [rules.generic-api-key]
+# entropy = 4.5  # Default is usually around 3.5-4.0

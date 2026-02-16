@@ -1,0 +1,157 @@
+# =============================================================================
+# Dependabot Configuration
+# =============================================================================
+# Automatically creates PRs to update vulnerable dependencies.
+# This file should be placed in each repository at .github/dependabot.yml
+# =============================================================================
+
+version: 2
+updates:
+  # -----------------------------------------------------------------------------
+  # GitHub Actions - Keep workflow actions up to date
+  # -----------------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci(deps):"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    # Group minor/patch updates to reduce PR noise
+    groups:
+      actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # -----------------------------------------------------------------------------
+  # JavaScript/TypeScript (npm)
+  # -----------------------------------------------------------------------------
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(npm):"
+    labels:
+      - "dependencies"
+      - "javascript"
+    # Open PRs against develop branch if it exists, otherwise main
+    # target-branch: "develop"
+    # Limit open PRs to avoid overwhelming
+    open-pull-requests-limit: 10
+    # Group updates
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+      production-dependencies:
+        dependency-type: "production"
+        update-types:
+          - "patch"
+    # Ignore major updates for stability (review manually)
+    # ignore:
+    #   - dependency-name: "*"
+    #     update-types: ["version-update:semver-major"]
+
+  # -----------------------------------------------------------------------------
+  # Python (pip)
+  # -----------------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(pip):"
+    labels:
+      - "dependencies"
+      - "python"
+    open-pull-requests-limit: 10
+    groups:
+      python-packages:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # -----------------------------------------------------------------------------
+  # Go modules
+  # -----------------------------------------------------------------------------
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(go):"
+    labels:
+      - "dependencies"
+      - "go"
+    open-pull-requests-limit: 10
+    groups:
+      go-modules:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # -----------------------------------------------------------------------------
+  # Rust (Cargo)
+  # -----------------------------------------------------------------------------
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(cargo):"
+    labels:
+      - "dependencies"
+      - "rust"
+    open-pull-requests-limit: 10
+    groups:
+      rust-crates:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # -----------------------------------------------------------------------------
+  # Docker
+  # -----------------------------------------------------------------------------
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(docker):"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # -----------------------------------------------------------------------------
+  # Terraform
+  # -----------------------------------------------------------------------------
+  - package-ecosystem: "terraform"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(terraform):"
+    labels:
+      - "dependencies"
+      - "terraform"
