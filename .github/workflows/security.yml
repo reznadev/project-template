@@ -199,7 +199,7 @@ jobs:
 
       - name: Create issue for secrets found
         if: failure() && env.CREATE_ISSUES == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const title = 'Security Alert: Secrets Detected';
@@ -277,7 +277,7 @@ jobs:
 
       - name: Create issue for vulnerabilities
         if: failure() && env.CREATE_ISSUES == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const title = 'Security Alert: Vulnerable Dependencies';
@@ -428,7 +428,7 @@ jobs:
 
       - name: Create issue for IaC findings
         if: steps.checkov.outcome == 'failure' && env.CREATE_ISSUES == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const title = 'Security Alert: IaC Misconfigurations';
@@ -511,7 +511,7 @@ jobs:
 
       - name: Add PR comment
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const status = (result) => {
