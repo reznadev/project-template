@@ -248,6 +248,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Full history so the PR gate can check out and scan the base branch.
+          fetch-depth: 0
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
@@ -265,7 +268,12 @@ jobs:
           sarif_file: 'trivy-results.sarif'
           category: 'dependency-scan'
 
-      - name: Check for critical/high vulnerabilities
+      # Absolute state of the branch. Drives the tracking issue on main and on
+      # the weekly cron, but never fails the build on its own: the total count
+      # is dominated by inherited transitive findings that no single change
+      # under review is responsible for.
+      - name: Check total fixable vulnerabilities
+        id: trivy-total
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
@@ -274,9 +282,114 @@ jobs:
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
           ignore-unfixed: true
+        continue-on-error: true
 
+      # ---------------------------------------------------------------------
+      # PR gate: fail only on findings this change introduces relative to its
+      # base. An absolute gate cannot distinguish a PR that removes a CVE from
+      # one that adds two, since both leave findings on the board.
+      # ---------------------------------------------------------------------
+      - name: Check out base branch for comparison
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          git worktree add .trivy-base "origin/${BASE_REF}"
+
+      - name: Scan base branch
+        if: github.event_name == 'pull_request'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.trivy-base'
+          format: 'json'
+          output: 'trivy-base.json'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+
+      # Removed before the head scan so the base manifests are not counted as
+      # part of the PR's own tree.
+      - name: Remove base checkout
+        if: github.event_name == 'pull_request'
+        run: git worktree remove .trivy-base
+
+      - name: Scan PR branch
+        if: github.event_name == 'pull_request'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy-head.json'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '0'
+          ignore-unfixed: true
+
+      - name: Compare findings against base
+        id: trivy-diff
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          # Key on package@version + advisory. Including the version matters:
+          # a dependency bump that swaps a vulnerable copy for an older
+          # vulnerable copy must read as a new finding, not as a match.
+          keys() {
+            jq -r '[.Results[]?.Vulnerabilities[]?
+                    | "\(.Severity)  \(.PkgName)@\(.InstalledVersion)  \(.VulnerabilityID)"]
+                   | unique[]' "$1" | sort -u
+          }
+
+          keys trivy-base.json > base.txt
+          keys trivy-head.json > head.txt
+          comm -13 base.txt head.txt > introduced.txt
+          comm -23 base.txt head.txt > resolved.txt
+
+          n_new=$(wc -l < introduced.txt | tr -d ' ')
+          n_fixed=$(wc -l < resolved.txt | tr -d ' ')
+          n_base=$(wc -l < base.txt | tr -d ' ')
+          echo "introduced=${n_new}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Dependency scan vs \`${BASE_REF}\`"
+            echo
+            echo "| | Count |"
+            echo "|---|---|"
+            echo "| Introduced by this PR | ${n_new} |"
+            echo "| Resolved by this PR | ${n_fixed} |"
+            echo "| Pre-existing on base | ${n_base} |"
+            echo
+            if [ "${n_new}" -gt 0 ]; then
+              echo "#### Introduced"
+              echo '```'
+              cat introduced.txt
+              echo '```'
+            fi
+            if [ "${n_fixed}" -gt 0 ]; then
+              echo "#### Resolved"
+              echo '```'
+              cat resolved.txt
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "introduced=${n_new}  resolved=${n_fixed}  pre-existing=${n_base}"
+          if [ "${n_new}" -gt 0 ]; then
+            echo "::error::This PR introduces ${n_new} CRITICAL/HIGH finding(s) not present on ${BASE_REF}"
+            cat introduced.txt
+          fi
+
+      # Paydown signal for inherited debt. PRs are gated by the diff instead,
+      # so this only runs for main pushes and the weekly cron. Cannot use
+      # failure() any more: the total check is continue-on-error, so the job
+      # is still green at this point even when findings exist.
       - name: Create issue for vulnerabilities
-        if: failure() && env.CREATE_ISSUES == 'true'
+        if: github.event_name != 'pull_request' && steps.trivy-total.outcome == 'failure' && env.CREATE_ISSUES == 'true'
         uses: actions/github-script@v8
         with:
           script: |
@@ -314,6 +427,10 @@ jobs:
                 labels: ['security', 'dependencies']
               });
             }
+
+      - name: Fail if this PR introduces new vulnerabilities
+        if: github.event_name == 'pull_request' && steps.trivy-diff.outputs.introduced != '0'
+        run: exit 1
 
   # ===========================================================================
   # SAST - Static Application Security Testing
